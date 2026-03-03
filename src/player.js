@@ -1281,6 +1281,17 @@ function validateClaimOnCard(card, claimType) {
         for (let row = 0; row < 5; row++) {
             if (grid[row].every(v => v)) return true;
         }
+        // Check any complete column (vertical line)
+        for (let col = 0; col < 5; col++) {
+            let colComplete = true;
+            for (let row = 0; row < 5; row++) {
+                if (!grid[row][col]) {
+                    colComplete = false;
+                    break;
+                }
+            }
+            if (colComplete) return true;
+        }
         return false;
     }
 
