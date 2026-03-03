@@ -229,6 +229,8 @@ function initSocket() {
         if (isMyCard) {
             showToast(`🎉 ¡FELICIDADES! Tu cartón #${data.cardIndex} ganó ${data.prizeType}!`, 'success');
             markCardAsWinner(data.cardIndex, data.prizeType);
+            // Show payment data form for the winning player
+            showWinnerPaymentDataModal(data.cardIndex, data.prizeType, data.gameId || currentGameId);
         } else {
             showToast(`Cartón #${data.cardIndex} ganó ${data.prizeType}.`, 'warning');
         }
@@ -1059,19 +1061,30 @@ function markMyCards() {
 
 function markCardAsWinner(serial, prizeType) {
     const cardEl = document.getElementById(`play-card-${serial}`);
-    if (!cardEl || cardEl.querySelector('.winner-badge-inline')) return;
+    if (!cardEl) return;
 
-    // Crear badge pequeño inline en vez de overlay bloqueante
+    // Check if this specific prizeType badge already exists
+    const existingBadges = cardEl.querySelectorAll('.winner-badge-inline');
+    for (const badge of existingBadges) {
+        if (badge.textContent.includes(prizeType)) return; // Already has this badge
+    }
+
+    // Crear badge pequeño inline — allows multiple badges (e.g. Línea + Bingo)
     const badge = document.createElement('div');
     badge.className = 'winner-badge-inline';
     badge.innerHTML = `🏆 ${prizeType}`;
 
-    // Insertar después del serial del cartón
-    const serialEl = cardEl.querySelector('.play-card-serial');
-    if (serialEl) {
-        serialEl.insertAdjacentElement('afterend', badge);
+    // Insertar después del último badge existente, o después del serial
+    const lastBadge = cardEl.querySelector('.winner-badge-inline:last-of-type');
+    if (lastBadge) {
+        lastBadge.insertAdjacentElement('afterend', badge);
     } else {
-        cardEl.prepend(badge);
+        const serialEl = cardEl.querySelector('.play-card-serial');
+        if (serialEl) {
+            serialEl.insertAdjacentElement('afterend', badge);
+        } else {
+            cardEl.prepend(badge);
+        }
     }
 }
 
@@ -1233,21 +1246,28 @@ function claimWin(claimType) {
 // Claim Validation — Verify card content before claiming
 // ============================================================
 function validateClaimOnCard(card, claimType) {
-    // Get the card element from the DOM to check marked cells
-    const cardEl = document.querySelector(`.my-bingo-card[data-serial="${card.serial}"]`);
+    // Cards are rendered with id="play-card-${serial}" and class="play-card"
+    const cardEl = document.getElementById(`play-card-${card.serial}`);
     if (!cardEl) return false;
 
-    // Get marked cells as a 5x5 grid
+    // Get all cells from the bingo-grid (not headers)
+    const gridContainer = cardEl.querySelector('.bingo-grid');
+    if (!gridContainer) return false;
+    const cells = gridContainer.querySelectorAll('.bingo-cell');
+    // cells are rendered row-major: row 0 cols B,I,N,G,O then row 1 cols B,I,N,G,O etc.
+    // So cell index = row * 5 + col
+
     const grid = [];
     for (let row = 0; row < 5; row++) {
         grid[row] = [];
         for (let col = 0; col < 5; col++) {
-            const cell = cardEl.querySelector(`.bingo-cell[data-row="${row}"][data-col="${col}"]`);
+            const idx = row * 5 + col;
+            const cell = cells[idx];
             if (!cell) {
                 grid[row][col] = false;
                 continue;
             }
-            // Center cell (FREE) is always marked
+            // Center cell (row 2, col 2) is FREE, always marked
             if (row === 2 && col === 2) {
                 grid[row][col] = true;
             } else {
@@ -1257,7 +1277,7 @@ function validateClaimOnCard(card, claimType) {
     }
 
     if (claimType === 'Línea') {
-        // Check any complete row
+        // Check any complete row (horizontal line)
         for (let row = 0; row < 5; row++) {
             if (grid[row].every(v => v)) return true;
         }
@@ -1375,7 +1395,14 @@ function showPlayerGameEndedModal(data) {
     }
 
     const winners = data.winners || [];
+    // Check if any of player's cards are in the winners list
     const isWinner = winners.some(w => {
+        const serial = String(w.cardIndex || w.cardSerial || '');
+        return myCards.has(serial);
+    });
+
+    // Find the winning cards of this player specifically
+    const myWinningCards = winners.filter(w => {
         const serial = String(w.cardIndex || w.cardSerial || '');
         return myCards.has(serial);
     });
@@ -1476,5 +1503,122 @@ function submitWinnerPaymentData() {
 
     showToast('✅ Datos enviados. El animador te contactar\u00e1 para el pago.', 'success');
     const overlay = document.getElementById('playerGameEndedOverlay');
+    if (overlay) overlay.remove();
+}
+
+// ============================================================
+// Winner Payment Data Modal — shown immediately when player wins
+// ============================================================
+function showWinnerPaymentDataModal(cardSerial, prizeType, gameId) {
+    let overlay = document.getElementById('winnerPayDataOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'winnerPayDataOverlay';
+        overlay.style.cssText = `
+            position: fixed; inset: 0; z-index: 310; background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center;
+            animation: fadeIn 0.3s ease; padding: 20px;
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    let iconEmoji = '🏆', borderColor = 'rgba(52,211,153,0.4)', gradientFrom = '#059669', gradientTo = '#10b981';
+    if (prizeType.includes('Figura')) { iconEmoji = '⭐'; borderColor = 'rgba(96,165,250,0.4)'; gradientFrom = '#3b82f6'; gradientTo = '#60a5fa'; }
+    else if (prizeType.includes('Línea')) { iconEmoji = '🏅'; borderColor = 'rgba(251,146,60,0.4)'; gradientFrom = '#d97706'; gradientTo = '#f59e0b'; }
+
+    overlay.innerHTML = `
+        <div style="text-align: center; max-width: 420px; width: 100%; background: rgba(15,23,42,0.95);
+            border: 1px solid ${borderColor}; border-radius: 16px; padding: 24px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.3);">
+            <div style="width: 64px; height: 64px; border-radius: 50%; background: linear-gradient(135deg, ${gradientFrom}, ${gradientTo});
+                display: flex; align-items: center; justify-content: center; margin: 0 auto 12px;
+                box-shadow: 0 0 25px rgba(0,0,0,0.3);">
+                <span style="font-size: 1.8rem;">${iconEmoji}</span>
+            </div>
+            <h2 style="color: white; font-size: 1.3rem; font-weight: 700; margin-bottom: 4px; font-family: 'Outfit', sans-serif;">
+                ¡Felicidades! Ganaste ${prizeType}
+            </h2>
+            <p style="color: #9ca3af; font-size: 0.8rem; margin-bottom: 16px;">
+                Cartón #${cardSerial} — Ingresa tus datos para recibir el pago del premio
+            </p>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; text-align: left; margin-bottom: 12px;">
+                <div style="grid-column: 1 / -1;">
+                    <label style="font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em;">Nombre completo *</label>
+                    <input type="text" id="wpd_name_${cardSerial}" placeholder="Tu nombre completo" style="width: 100%; padding: 10px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: white;
+                        font-size: 0.85rem; outline: none; box-sizing: border-box; margin-top: 4px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em;">Cédula</label>
+                    <input type="text" id="wpd_cedula_${cardSerial}" placeholder="V-12345678" style="width: 100%; padding: 10px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: white;
+                        font-size: 0.85rem; outline: none; box-sizing: border-box; margin-top: 4px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em;">Teléfono</label>
+                    <input type="tel" id="wpd_phone_${cardSerial}" placeholder="04XX-XXXXXXX" style="width: 100%; padding: 10px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: white;
+                        font-size: 0.85rem; outline: none; box-sizing: border-box; margin-top: 4px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em;">Banco receptor</label>
+                    <input type="text" id="wpd_bank_${cardSerial}" placeholder="Banesco..." style="width: 100%; padding: 10px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: white;
+                        font-size: 0.85rem; outline: none; box-sizing: border-box; margin-top: 4px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em;">Método de pago</label>
+                    <select id="wpd_method_${cardSerial}" style="width: 100%; padding: 10px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: white;
+                        font-size: 0.85rem; outline: none; box-sizing: border-box; margin-top: 4px; appearance: none;">
+                        <option value="pago_movil" style="background: #1e293b;">Pago Móvil</option>
+                        <option value="transferencia" style="background: #1e293b;">Transferencia</option>
+                        <option value="efectivo" style="background: #1e293b;">Efectivo</option>
+                        <option value="otro" style="background: #1e293b;">Otro</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 8px;">
+                <button onclick="submitWinnerPayDataModal('${cardSerial}', '${prizeType.replace(/'/g, "\\'")}', '${gameId}')"
+                    style="flex: 1; padding: 12px; border-radius: 10px; background: linear-gradient(135deg, ${gradientFrom}, ${gradientTo});
+                    color: white; font-weight: 700; border: none; cursor: pointer; font-size: 0.85rem; transition: all 0.2s;">
+                    ✅ Enviar Datos
+                </button>
+                <button onclick="document.getElementById('winnerPayDataOverlay').remove();"
+                    style="padding: 12px 16px; border-radius: 10px; background: rgba(255,255,255,0.1);
+                    border: 1px solid rgba(255,255,255,0.2); color: white; font-weight: 600; cursor: pointer; font-size: 0.85rem;">
+                    Luego
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function submitWinnerPayDataModal(cardSerial, prizeType, gameId) {
+    const name = document.getElementById(`wpd_name_${cardSerial}`)?.value.trim();
+    const cedula = document.getElementById(`wpd_cedula_${cardSerial}`)?.value.trim();
+    const phone = document.getElementById(`wpd_phone_${cardSerial}`)?.value.trim();
+    const bank = document.getElementById(`wpd_bank_${cardSerial}`)?.value.trim();
+    const method = document.getElementById(`wpd_method_${cardSerial}`)?.value || 'pago_movil';
+
+    if (!name) {
+        showToast('Por favor ingresa tu nombre.', 'warning');
+        return;
+    }
+
+    if (socket) {
+        socket.emit('winner-payment-data', {
+            playerName,
+            gameId,
+            cardSerial,
+            prizeType,
+            paymentData: { name, cedula, phone, bank, method }
+        });
+    }
+
+    showToast('✅ Datos enviados. El animador te contactará para el pago.', 'success');
+    const overlay = document.getElementById('winnerPayDataOverlay');
     if (overlay) overlay.remove();
 }
