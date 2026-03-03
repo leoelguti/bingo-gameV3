@@ -4,6 +4,7 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require('socket.io');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +17,7 @@ const saveFile = path.join(savePath, 'gameState.json');
 const winnersFile = path.join(savePath, 'winners_history.json');
 const cardHashesFile = path.join(savePath, 'card_hashes.json');
 const winnerPaymentsFile = path.join(savePath, 'winner_payments.json');
+const usersFile = path.join(savePath, 'users.json');
 
 if (!fs.existsSync(savePath)) {
     fs.mkdirSync(savePath);
@@ -49,6 +51,8 @@ let allTimeWinners = loadJSON(winnersFile, []);
 let cardHashHistory = loadJSON(cardHashesFile, []);
 // Winner payment records
 let winnerPayments = loadJSON(winnerPaymentsFile, []);
+// User accounts
+let users = loadJSON(usersFile, []);
 
 function generateGameId() {
     return Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -151,6 +155,89 @@ function getPublicCardList() {
         reservedAt: purchasedCards[c.serial]?.reservedAt || null
     }));
 }
+
+// ============================================================
+// API — Autenticación de Jugadores
+// ============================================================
+const SALT_ROUNDS = 10;
+const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
+
+app.post('/api/auth/register', async (req, res) => {
+    const { username, password, displayName } = req.body;
+
+    // Validaciones
+    if (!username || !password || !displayName) {
+        return res.status(400).json({ error: 'Todos los campos son obligatorios.' });
+    }
+
+    if (!USERNAME_REGEX.test(username)) {
+        return res.status(400).json({ error: 'Usuario: 3-20 caracteres, solo letras, números y guiones bajos.' });
+    }
+
+    if (password.length < 4) {
+        return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres.' });
+    }
+
+    if (displayName.trim().length < 2 || displayName.trim().length > 30) {
+        return res.status(400).json({ error: 'El nombre debe tener entre 2 y 30 caracteres.' });
+    }
+
+    // Check duplicate
+    const existing = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+    if (existing) {
+        return res.status(409).json({ error: 'Este nombre de usuario ya está registrado.' });
+    }
+
+    try {
+        const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+        const newUser = {
+            username: username.toLowerCase(),
+            displayName: displayName.trim(),
+            passwordHash,
+            createdAt: new Date().toISOString()
+        };
+        users.push(newUser);
+        saveJSON(usersFile, users);
+
+        console.log(`[AUTH] Nuevo usuario registrado: "${newUser.displayName}" (@${newUser.username})`);
+        res.json({
+            success: true,
+            user: { username: newUser.username, displayName: newUser.displayName }
+        });
+    } catch (err) {
+        console.error('[AUTH] Error en registro:', err);
+        res.status(500).json({ error: 'Error interno al crear la cuenta.' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Usuario y contraseña son obligatorios.' });
+    }
+
+    const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+    if (!user) {
+        return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+    }
+
+    try {
+        const valid = await bcrypt.compare(password, user.passwordHash);
+        if (!valid) {
+            return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+        }
+
+        console.log(`[AUTH] Login exitoso: "${user.displayName}" (@${user.username})`);
+        res.json({
+            success: true,
+            user: { username: user.username, displayName: user.displayName }
+        });
+    } catch (err) {
+        console.error('[AUTH] Error en login:', err);
+        res.status(500).json({ error: 'Error interno al iniciar sesión.' });
+    }
+});
 
 // ============================================================
 // Rutas HTML

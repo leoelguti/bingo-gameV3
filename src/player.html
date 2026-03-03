@@ -32,23 +32,115 @@
 
 <body>
     <!-- ============================================================
-         Login Screen
+         Login / Register Screen
          ============================================================ -->
     <div id="loginScreen" class="login-screen">
         <div class="login-card">
+            <!-- Logo -->
             <div
-                class="w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-500/50">
+                class="w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-5 shadow-lg shadow-indigo-500/50">
                 <i data-lucide="gamepad-2" class="text-white w-10 h-10"></i>
             </div>
             <h1>BINGO PRO MAX</h1>
-            <p>Ingresa tu nombre para unirte a la partida</p>
-            <input type="text" id="playerNameInput" class="login-input" placeholder="Tu nombre..." maxlength="30"
-                autocomplete="off">
-            <button id="joinGameBtn" class="login-btn" disabled>
-                <span class="flex items-center justify-center gap-2">
-                    <i data-lucide="log-in" class="w-5 h-5"></i> Entrar al Juego
-                </span>
-            </button>
+
+            <!-- Auth Tabs -->
+            <div class="auth-tabs">
+                <button class="auth-tab active" data-auth-tab="login" onclick="switchAuthTab('login')">
+                    <i data-lucide="log-in" class="w-4 h-4"></i> Iniciar Sesión
+                </button>
+                <button class="auth-tab" data-auth-tab="register" onclick="switchAuthTab('register')">
+                    <i data-lucide="user-plus" class="w-4 h-4"></i> Registrarse
+                </button>
+            </div>
+
+            <!-- Error message (inline) -->
+            <div id="authError" class="auth-error hidden">
+                <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0"></i>
+                <span id="authErrorText"></span>
+            </div>
+
+            <!-- Login Form -->
+            <div id="loginForm" class="auth-form">
+                <div class="form-group-auth">
+                    <label for="loginUsername">
+                        <i data-lucide="user" class="w-3.5 h-3.5 inline"></i> Usuario
+                    </label>
+                    <input type="text" id="loginUsername" class="login-input" placeholder="tu_usuario"
+                        autocomplete="username" autocapitalize="off">
+                </div>
+                <div class="form-group-auth">
+                    <label for="loginPassword">
+                        <i data-lucide="lock" class="w-3.5 h-3.5 inline"></i> Contraseña
+                    </label>
+                    <div class="password-wrapper">
+                        <input type="password" id="loginPassword" class="login-input" placeholder="••••••••"
+                            autocomplete="current-password">
+                        <button type="button" class="password-toggle" onclick="togglePassword('loginPassword', this)">
+                            <i data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+                <button id="loginBtn" class="login-btn" onclick="loginPlayer()" disabled>
+                    <span class="flex items-center justify-center gap-2">
+                        <i data-lucide="log-in" class="w-5 h-5"></i> Entrar al Juego
+                    </span>
+                </button>
+                <p class="auth-switch-text">
+                    ¿No tienes cuenta? <a href="#" onclick="switchAuthTab('register'); return false;">Regístrate
+                        aquí</a>
+                </p>
+            </div>
+
+            <!-- Register Form -->
+            <div id="registerForm" class="auth-form hidden">
+                <div class="form-group-auth">
+                    <label for="registerName">
+                        <i data-lucide="user-circle" class="w-3.5 h-3.5 inline"></i> Nombre para mostrar
+                    </label>
+                    <input type="text" id="registerName" class="login-input" placeholder="Tu nombre..." maxlength="30"
+                        autocomplete="name">
+                </div>
+                <div class="form-group-auth">
+                    <label for="registerUsername">
+                        <i data-lucide="at-sign" class="w-3.5 h-3.5 inline"></i> Usuario
+                    </label>
+                    <input type="text" id="registerUsername" class="login-input" placeholder="tu_usuario"
+                        autocomplete="username" autocapitalize="off" maxlength="20">
+                </div>
+                <div class="form-group-auth">
+                    <label for="registerPassword">
+                        <i data-lucide="lock" class="w-3.5 h-3.5 inline"></i> Contraseña
+                    </label>
+                    <div class="password-wrapper">
+                        <input type="password" id="registerPassword" class="login-input"
+                            placeholder="Mínimo 4 caracteres" autocomplete="new-password">
+                        <button type="button" class="password-toggle"
+                            onclick="togglePassword('registerPassword', this)">
+                            <i data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group-auth">
+                    <label for="registerConfirm">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5 inline"></i> Confirmar contraseña
+                    </label>
+                    <div class="password-wrapper">
+                        <input type="password" id="registerConfirm" class="login-input"
+                            placeholder="Repite la contraseña" autocomplete="new-password">
+                        <button type="button" class="password-toggle" onclick="togglePassword('registerConfirm', this)">
+                            <i data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+                <button id="registerBtn" class="login-btn register-btn" onclick="registerPlayer()" disabled>
+                    <span class="flex items-center justify-center gap-2">
+                        <i data-lucide="user-plus" class="w-5 h-5"></i> Crear Cuenta
+                    </span>
+                </button>
+                <p class="auth-switch-text">
+                    ¿Ya tienes cuenta? <a href="#" onclick="switchAuthTab('login'); return false;">Inicia sesión</a>
+                </p>
+            </div>
         </div>
     </div>
 

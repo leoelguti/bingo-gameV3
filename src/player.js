@@ -28,29 +28,138 @@ let currentGameId = '';         // ID único de la partida actual
 let currentSelectedFigure = 'X'; // Figura seleccionada por el animador
 
 // ============================================================
-// Login
+// Authentication
 // ============================================================
-const playerNameInput = document.getElementById('playerNameInput');
-const joinGameBtn = document.getElementById('joinGameBtn');
 const loginScreen = document.getElementById('loginScreen');
 const gameView = document.getElementById('gameView');
 
-playerNameInput.addEventListener('input', () => {
-    joinGameBtn.disabled = playerNameInput.value.trim().length === 0;
-});
+// --- Tab Switching ---
+function switchAuthTab(tab) {
+    document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`.auth-tab[data-auth-tab="${tab}"]`).classList.add('active');
 
-playerNameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && playerNameInput.value.trim().length > 0) {
-        joinGame();
+    document.getElementById('loginForm').classList.toggle('hidden', tab !== 'login');
+    document.getElementById('registerForm').classList.toggle('hidden', tab !== 'register');
+    hideAuthError();
+    if (window.lucide) window.lucide.createIcons();
+}
+
+// --- Password Toggle ---
+function togglePassword(inputId, btn) {
+    const input = document.getElementById(inputId);
+    const isPassword = input.type === 'password';
+    input.type = isPassword ? 'text' : 'password';
+    const icon = btn.querySelector('i');
+    if (icon) {
+        icon.setAttribute('data-lucide', isPassword ? 'eye-off' : 'eye');
+        if (window.lucide) window.lucide.createIcons();
     }
-});
+}
 
-joinGameBtn.addEventListener('click', joinGame);
+// --- Error Display ---
+function showAuthError(msg) {
+    const el = document.getElementById('authError');
+    document.getElementById('authErrorText').textContent = msg;
+    el.classList.remove('hidden');
+}
 
-function joinGame() {
-    playerName = playerNameInput.value.trim();
-    if (!playerName) return;
+function hideAuthError() {
+    document.getElementById('authError').classList.add('hidden');
+}
 
+// --- Login ---
+async function loginPlayer() {
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+
+    if (!username || !password) {
+        showAuthError('Ingresa tu usuario y contraseña.');
+        return;
+    }
+
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="flex items-center justify-center gap-2"><div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Entrando...</span>';
+
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+            localStorage.setItem('bingoUser', JSON.stringify(data.user));
+            enterGame(data.user.displayName);
+        } else {
+            showAuthError(data.error || 'Error al iniciar sesión.');
+            btn.disabled = false;
+            btn.innerHTML = '<span class="flex items-center justify-center gap-2"><i data-lucide="log-in" class="w-5 h-5"></i> Entrar al Juego</span>';
+            if (window.lucide) window.lucide.createIcons();
+        }
+    } catch (err) {
+        showAuthError('Error de conexión con el servidor.');
+        btn.disabled = false;
+        btn.innerHTML = '<span class="flex items-center justify-center gap-2"><i data-lucide="log-in" class="w-5 h-5"></i> Entrar al Juego</span>';
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+// --- Register ---
+async function registerPlayer() {
+    const displayName = document.getElementById('registerName').value.trim();
+    const username = document.getElementById('registerUsername').value.trim();
+    const password = document.getElementById('registerPassword').value;
+    const confirm = document.getElementById('registerConfirm').value;
+
+    if (!displayName || !username || !password) {
+        showAuthError('Todos los campos son obligatorios.');
+        return;
+    }
+
+    if (password !== confirm) {
+        showAuthError('Las contraseñas no coinciden.');
+        return;
+    }
+
+    if (password.length < 4) {
+        showAuthError('La contraseña debe tener al menos 4 caracteres.');
+        return;
+    }
+
+    const btn = document.getElementById('registerBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="flex items-center justify-center gap-2"><div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Creando...</span>';
+
+    try {
+        const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, displayName })
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+            localStorage.setItem('bingoUser', JSON.stringify(data.user));
+            enterGame(data.user.displayName);
+        } else {
+            showAuthError(data.error || 'Error al registrarse.');
+            btn.disabled = false;
+            btn.innerHTML = '<span class="flex items-center justify-center gap-2"><i data-lucide="user-plus" class="w-5 h-5"></i> Crear Cuenta</span>';
+            if (window.lucide) window.lucide.createIcons();
+        }
+    } catch (err) {
+        showAuthError('Error de conexión con el servidor.');
+        btn.disabled = false;
+        btn.innerHTML = '<span class="flex items-center justify-center gap-2"><i data-lucide="user-plus" class="w-5 h-5"></i> Crear Cuenta</span>';
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+// --- Enter Game (common entry point after auth) ---
+function enterGame(displayName) {
+    playerName = displayName;
     document.getElementById('displayPlayerName').textContent = playerName;
 
     loginScreen.style.transition = 'opacity 0.4s';
@@ -62,6 +171,61 @@ function joinGame() {
         loadInitialState();
     }, 400);
 }
+
+// --- Auto-login from localStorage ---
+(function autoLogin() {
+    const saved = localStorage.getItem('bingoUser');
+    if (saved) {
+        try {
+            const user = JSON.parse(saved);
+            if (user && user.displayName) {
+                enterGame(user.displayName);
+                return;
+            }
+        } catch (e) { /* ignore */ }
+    }
+})();
+
+// --- Input validation for button enabling ---
+document.addEventListener('DOMContentLoaded', () => {
+    // Login form validation
+    const loginUser = document.getElementById('loginUsername');
+    const loginPass = document.getElementById('loginPassword');
+    const loginBtn = document.getElementById('loginBtn');
+
+    function validateLoginForm() {
+        loginBtn.disabled = !(loginUser.value.trim().length > 0 && loginPass.value.length > 0);
+    }
+    loginUser.addEventListener('input', validateLoginForm);
+    loginPass.addEventListener('input', validateLoginForm);
+
+    // Enter key for login
+    loginPass.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !loginBtn.disabled) loginPlayer(); });
+    loginUser.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !loginBtn.disabled) loginPlayer(); });
+
+    // Register form validation
+    const regName = document.getElementById('registerName');
+    const regUser = document.getElementById('registerUsername');
+    const regPass = document.getElementById('registerPassword');
+    const regConfirm = document.getElementById('registerConfirm');
+    const regBtn = document.getElementById('registerBtn');
+
+    function validateRegForm() {
+        regBtn.disabled = !(
+            regName.value.trim().length >= 2 &&
+            regUser.value.trim().length >= 3 &&
+            regPass.value.length >= 4 &&
+            regConfirm.value.length > 0
+        );
+    }
+    regName.addEventListener('input', validateRegForm);
+    regUser.addEventListener('input', validateRegForm);
+    regPass.addEventListener('input', validateRegForm);
+    regConfirm.addEventListener('input', validateRegForm);
+
+    // Enter key for register
+    regConfirm.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !regBtn.disabled) registerPlayer(); });
+});
 
 // ============================================================
 // Socket.IO Connection
