@@ -293,14 +293,21 @@
                     </div>
                 </div>
 
-                <!-- Winners Log -->
-                <div id="winnersLog" class="glass-panel p-5 rounded-2xl shadow-xl border border-yellow-500/20">
-                    <h3
-                        class="text-sm text-yellow-400 font-medium uppercase tracking-wider mb-4 flex items-center gap-2 border-b border-white/10 pb-2">
-                        <i data-lucide="award" class="w-5 h-5"></i> Registro de Ganadores
-                    </h3>
+                <!-- Winners Log — Now a button to open modal -->
+                <div class="glass-panel p-4 rounded-2xl shadow-xl border border-yellow-500/20 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="award" class="w-5 h-5 text-yellow-400"></i>
+                        <span class="text-sm text-yellow-400 font-medium uppercase tracking-wider">Registro de Ganadores</span>
+                    </div>
+                    <button onclick="showWinnersHistoryModal()" 
+                        class="text-xs bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 border border-yellow-500/30 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 font-bold">
+                        <i data-lucide="external-link" class="w-3.5 h-3.5"></i> Ver Historial
+                    </button>
+                </div>
+
+                <!-- Current round winners (compact inline, hidden by default) -->
+                <div id="winnersLog" class="hidden">
                     <ul id="winnersList" class="space-y-2 max-h-[150px] overflow-y-auto custom-scrollbar">
-                        <!-- Lista vacia incial -->
                         <li class="text-gray-500 text-sm italic">No hay ganadores aún en esta ronda.</li>
                     </ul>
                 </div>
@@ -399,9 +406,111 @@
         </div>
     </div>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="script_v4.js?v=4.1"></script>
+    <script src="script_v4.js?v=4.2"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- Game Ended Modal -->
+    <div id="gameEndedOverlay"
+        class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity">
+        <div class="glass-panel border border-yellow-500/50 shadow-[0_0_50px_rgba(234,179,8,0.2)] rounded-2xl p-8 max-w-md w-full mx-4 relative overflow-hidden text-center"
+            id="gameEndedContent">
+        </div>
+    </div>
+
+    <!-- Winners History Modal -->
+    <div id="winnersHistoryOverlay"
+        class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity">
+        <div class="glass-panel border border-yellow-500/50 shadow-[0_0_50px_rgba(234,179,8,0.15)] rounded-2xl max-w-lg w-full mx-4 relative overflow-hidden">
+            <div class="p-5 border-b border-white/10 flex items-center justify-between">
+                <h3 class="text-white font-bold text-lg flex items-center gap-2">
+                    <i data-lucide="award" class="w-5 h-5 text-yellow-400"></i> Historial de Ganadores
+                </h3>
+                <button onclick="closeWinnersHistoryModal()" class="text-gray-400 hover:text-white transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div id="winnersHistoryList" class="p-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                <p class="text-gray-500 text-sm italic text-center py-4">No hay ganadores registrados.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Winner Payment Form Modal -->
+    <div id="winnerPaymentFormOverlay"
+        class="fixed inset-0 z-[110] hidden flex items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity">
+        <div class="glass-panel border border-cyan-500/50 shadow-[0_0_40px_rgba(6,182,212,0.15)] rounded-2xl max-w-md w-full mx-4 relative overflow-hidden">
+            <div class="p-5 border-b border-white/10 flex items-center justify-between">
+                <h3 class="text-white font-bold text-lg flex items-center gap-2">
+                    <i data-lucide="wallet" class="w-5 h-5 text-cyan-400"></i> Registrar Pago a Ganador
+                </h3>
+                <button onclick="closeWinnerPaymentForm()" class="text-gray-400 hover:text-white transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div class="grid grid-cols-3 gap-2 text-center bg-white/5 rounded-lg p-3 border border-white/10">
+                    <div>
+                        <div class="text-[10px] text-gray-400 uppercase">Partida</div>
+                        <div id="wpfGameId" class="text-xs text-white font-bold">—</div>
+                    </div>
+                    <div>
+                        <div class="text-[10px] text-gray-400 uppercase">Cartón</div>
+                        <div id="wpfCardSerial" class="text-xs text-white font-bold">—</div>
+                    </div>
+                    <div>
+                        <div class="text-[10px] text-gray-400 uppercase">Modalidad</div>
+                        <div id="wpfMode" class="text-xs text-white font-bold">—</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="form-group space-y-1">
+                        <label class="text-xs text-gray-400 font-medium">Nombre *</label>
+                        <input type="text" id="wpfName" placeholder="Nombre del ganador"
+                            class="w-full glass-input px-3 py-2 rounded-lg text-white text-sm focus:ring-2 focus:ring-cyan-500 transition-all">
+                    </div>
+                    <div class="form-group space-y-1">
+                        <label class="text-xs text-gray-400 font-medium">Monto ($) *</label>
+                        <input type="number" id="wpfAmount" placeholder="0.00" step="0.01"
+                            class="w-full glass-input px-3 py-2 rounded-lg text-white text-sm focus:ring-2 focus:ring-cyan-500 transition-all">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="form-group space-y-1">
+                        <label class="text-xs text-gray-400 font-medium">Cédula</label>
+                        <input type="text" id="wpfCedula" placeholder="V-12345678"
+                            class="w-full glass-input px-3 py-2 rounded-lg text-white text-sm focus:ring-2 focus:ring-cyan-500 transition-all">
+                    </div>
+                    <div class="form-group space-y-1">
+                        <label class="text-xs text-gray-400 font-medium">Banco</label>
+                        <input type="text" id="wpfBank" placeholder="Banesco..."
+                            class="w-full glass-input px-3 py-2 rounded-lg text-white text-sm focus:ring-2 focus:ring-cyan-500 transition-all">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="form-group space-y-1">
+                        <label class="text-xs text-gray-400 font-medium">Teléfono</label>
+                        <input type="tel" id="wpfPhone" placeholder="04XX-XXXXXXX"
+                            class="w-full glass-input px-3 py-2 rounded-lg text-white text-sm focus:ring-2 focus:ring-cyan-500 transition-all">
+                    </div>
+                    <div class="form-group space-y-1">
+                        <label class="text-xs text-gray-400 font-medium">Método</label>
+                        <select id="wpfMethod"
+                            class="w-full glass-input px-3 py-2 rounded-lg text-white text-sm focus:ring-2 focus:ring-cyan-500 transition-all appearance-none">
+                            <option value="pago_movil" class="bg-gray-800">Pago Móvil</option>
+                            <option value="transferencia" class="bg-gray-800">Transferencia</option>
+                            <option value="efectivo" class="bg-gray-800">Efectivo</option>
+                            <option value="otro" class="bg-gray-800">Otro</option>
+                        </select>
+                    </div>
+                </div>
+                <button onclick="submitWinnerPayment()"
+                    class="w-full bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold py-3 px-4 rounded-xl shadow-lg hover:shadow-cyan-500/30 transition-all flex items-center justify-center gap-2">
+                    <i data-lucide="check-circle" class="w-5 h-5"></i> Registrar Pago
+                </button>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>

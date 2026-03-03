@@ -14,6 +14,8 @@ let cardsGenerated = false;
 let nextCardSerial = 1;
 let messageTimeout = null;
 let cardPrice = 10;
+let currentGameId = '';
+let allTimeWinnersCache = [];
 //CODIGO NUEVO//CODIGO NUEVO//CODIGO NUEVO//CODIGO NUEVO//CODIGO NUEVO//CODIGO NUEVO
 
 function getGameState() {
@@ -491,7 +493,11 @@ function generateCards() {
     // winners.clear(); // PROTECCION AL HISTORIAL DE GANADORES INTERPARTIDAS
     const figureModeCheckbox = document.getElementById('figureMode');
     gameMode = figureModeCheckbox.checked ? 'figure' : 'line';
-    document.getElementById('gameMode').textContent = figureModeCheckbox.checked ? 'Modo: Figura' : 'Modo: Línea';
+
+    // Generate unique game ID
+    currentGameId = Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    document.getElementById('gameMode').innerHTML = `${figureModeCheckbox.checked ? 'Modo: Figura' : 'Modo: Línea'} <span class="text-gray-500 text-[10px] ml-2">ID: ${currentGameId}</span>`;
+
     document.getElementById('randomNumber').textContent = '?';
     document.querySelectorAll('.ball').forEach(ball => ball.classList.remove('called'));
 
@@ -541,7 +547,8 @@ function generateCards() {
             cards: cardsData,
             cardPrice: cardPrice,
             gameMode: gameMode,
-            selectedFigure: selectedFigure
+            selectedFigure: selectedFigure,
+            gameId: currentGameId
         });
 
         // También registrar via API REST como backup
@@ -1217,31 +1224,54 @@ document.addEventListener('DOMContentLoaded', () => {
             const genBtn = document.getElementById('generateNumber');
             if (genBtn) genBtn.disabled = true;
 
-            // Mostrar mensaje con botones de verificación
-            const msgBox = document.getElementById('messageBox');
-            const msgText = document.getElementById('messageText');
-            msgText.innerHTML = `
-                <div style="margin-bottom: 12px;">🎤 <strong>"${data.playerName}"</strong> cantó <strong>${data.claimType}</strong></div>
-                <div style="margin-bottom: 16px; color: #94a3b8;">Cartón #${data.cardSerial} — Verifique el cartón</div>
-                <div style="display: flex; gap: 12px; justify-content: center;">
-                    <button onclick="resolveClaimFromAnimator('${data.playerName}', ${data.cardSerial}, '${data.claimType}', true)" 
-                        style="padding: 10px 24px; border-radius: 10px; background: linear-gradient(135deg, #059669, #10b981); color: white; font-weight: 700; border: none; cursor: pointer; font-size: 0.9rem;">
-                        ✓ Válido
-                    </button>
-                    <button onclick="resolveClaimFromAnimator('${data.playerName}', ${data.cardSerial}, '${data.claimType}', false)" 
-                        style="padding: 10px 24px; border-radius: 10px; background: linear-gradient(135deg, #dc2626, #ef4444); color: white; font-weight: 700; border: none; cursor: pointer; font-size: 0.9rem;">
-                        ✗ Inválido
-                    </button>
-                </div>
-            `;
-            msgBox.classList.remove('hidden');
-            document.getElementById('closeMessageBox').style.display = 'none';
+            // Use the unified winner verification modal
+            const overlay = document.getElementById('winnerQuestionOverlay');
+            const overlayText = document.getElementById('winnerQuestionText');
+            const winnerCardImage = document.getElementById('winnerCardImage');
+            const yesButton = document.getElementById('winnerYes');
+            const noButton = document.getElementById('winnerNo');
+
+            // Find and capture the card
+            const cardEl = document.querySelector(`.bingo-card[data-card-index="${data.cardSerial}"]`);
+            const modalTitle = document.querySelector('#winnerModalContent h2');
+            if (modalTitle) modalTitle.textContent = `🎤 "${data.playerName}" cantó ${data.claimType}`;
+            overlayText.textContent = `Cartón #${data.cardSerial} — Verifique el cartón del jugador`;
+
+            if (cardEl) {
+                html2canvas(cardEl, { backgroundColor: '#0f172a', scale: 2 }).then(canvas => {
+                    winnerCardImage.src = canvas.toDataURL('image/png');
+                    winnerCardImage.style.display = '';
+                }).catch(() => {
+                    winnerCardImage.style.display = 'none';
+                });
+            } else {
+                winnerCardImage.style.display = 'none';
+            }
+
+            yesButton.textContent = '✓ Válido';
+            noButton.textContent = '✗ Inválido';
+
+            yesButton.onclick = () => {
+                overlay.classList.add('hidden');
+                resolveClaimFromAnimator(data.playerName, data.cardSerial, data.claimType, true);
+            };
+            noButton.onclick = () => {
+                overlay.classList.add('hidden');
+                resolveClaimFromAnimator(data.playerName, data.cardSerial, data.claimType, false);
+            };
+
+            overlay.classList.remove('hidden');
+            document.getElementById('winnerModalContent').classList.add('scale-100');
+            document.getElementById('winnerModalContent').classList.remove('scale-95');
         });
 
         socket.on('claim-result', (data) => {
             // Re-habilitar generación de bolas
             const genBtn = document.getElementById('generateNumber');
             if (genBtn) genBtn.disabled = false;
+
+            const overlay = document.getElementById('winnerQuestionOverlay');
+            overlay.classList.add('hidden');
 
             const msgBox = document.getElementById('messageBox');
             msgBox.classList.add('hidden');
@@ -1252,6 +1282,17 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 showMessage(`❌ Claim de "${data.playerName}" (${data.claimType}) fue rechazado. El juego continúa.`);
             }
+        });
+
+        // === GAME-ENDED: Bingo validated, show post-game modal ===
+        socket.on('game-ended', (data) => {
+            allTimeWinnersCache = data.allTimeWinners || [];
+            showGameEndedModal(data);
+        });
+
+        // === GAME-BREAK: Receso ===
+        socket.on('game-break', (data) => {
+            showMessage(`⏸️ Receso de ${data.minutes} minuto(s). El juego se reanudará pronto.`);
         });
     }
 
@@ -1424,8 +1465,205 @@ function resolveClaimFromAnimator(playerName, cardSerial, claimType, valid) {
             valid
         });
     }
-    // Cerrar el mensaje
+    // Cerrar el mensaje y el modal de verificación
     const msgBox = document.getElementById('messageBox');
     msgBox.classList.add('hidden');
     document.getElementById('closeMessageBox').style.display = '';
+    const overlay = document.getElementById('winnerQuestionOverlay');
+    if (overlay) overlay.classList.add('hidden');
 }
+
+// ============================================================
+// Game-Ended Modal (Animator) — Post-Bingo
+// ============================================================
+function showGameEndedModal(data) {
+    const modal = document.getElementById('gameEndedOverlay');
+    if (!modal) return;
+
+    const winnersHtml = (data.winners || []).map(w => {
+        let icon = 'award', color = 'text-emerald-400';
+        if (w.prizeType && w.prizeType.includes('Figura')) { icon = 'star'; color = 'text-blue-400'; }
+        else if (w.prizeType && w.prizeType.includes('Línea')) { icon = 'medal'; color = 'text-orange-400'; }
+        return `<div class="flex items-center gap-2 p-2 rounded-lg bg-white/5 border border-white/10">
+            <i data-lucide="${icon}" class="w-4 h-4 ${color}"></i>
+            <span class="text-white font-bold text-sm">#${w.cardIndex || w.cardSerial || '?'}</span>
+            <span class="text-xs ${color} font-bold uppercase">${w.prizeType || '?'}</span>
+        </div>`;
+    }).join('');
+
+    document.getElementById('gameEndedContent').innerHTML = `
+        <div class="w-16 h-16 bg-gradient-to-br from-yellow-500 to-amber-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg shadow-yellow-500/40">
+            <span style="font-size: 2rem;">🏆</span>
+        </div>
+        <h2 class="text-2xl font-bold text-white mb-1 font-display">¡Partida Finalizada!</h2>
+        <p class="text-sm text-gray-400 mb-4">ID: ${data.gameId || currentGameId} — Pote: $${(data.totalPrize || 0).toFixed(2)}</p>
+        <div class="mb-4">
+            <h4 class="text-xs text-yellow-400 uppercase tracking-wider mb-2 font-bold">Ganadores de esta ronda</h4>
+            <div class="space-y-2 max-h-[200px] overflow-y-auto custom-scrollbar">${winnersHtml || '<p class="text-gray-500 text-sm italic">No hubo ganadores.</p>'}</div>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="document.getElementById('gameEndedOverlay').classList.add('hidden'); showNewGameConfirm();"
+                class="flex-1 bg-gradient-to-r from-emerald-600 to-green-600 text-white font-bold py-3 px-4 rounded-xl shadow-lg hover:shadow-emerald-500/30 transition-all flex items-center justify-center gap-2">
+                <i data-lucide="play" class="w-5 h-5"></i> Nueva Partida
+            </button>
+            <button onclick="showBreakPrompt()"
+                class="flex-1 bg-gradient-to-r from-amber-600 to-yellow-600 text-white font-bold py-3 px-4 rounded-xl shadow-lg hover:shadow-amber-500/30 transition-all flex items-center justify-center gap-2">
+                <i data-lucide="coffee" class="w-5 h-5"></i> Dar Receso
+            </button>
+        </div>
+    `;
+
+    modal.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function showBreakPrompt() {
+    const minutes = prompt('¿Cuántos minutos de receso?', '5');
+    if (minutes && !isNaN(parseInt(minutes))) {
+        if (socket) socket.emit('game-break', { minutes: parseInt(minutes) });
+        document.getElementById('gameEndedOverlay').classList.add('hidden');
+        showMessage(`⏸️ Receso de ${minutes} minuto(s) notificado a todos los jugadores.`);
+    }
+}
+
+// ============================================================
+// Winners History Modal (Persistent)
+// ============================================================
+function showWinnersHistoryModal() {
+    const modal = document.getElementById('winnersHistoryOverlay');
+    if (!modal) return;
+    renderWinnersHistoryContent();
+    modal.classList.remove('hidden');
+}
+
+function closeWinnersHistoryModal() {
+    const modal = document.getElementById('winnersHistoryOverlay');
+    if (modal) modal.classList.add('hidden');
+}
+
+function renderWinnersHistoryContent() {
+    const container = document.getElementById('winnersHistoryList');
+    if (!container) return;
+
+    // Merge current session winners with allTimeWinnersCache
+    const allWinners = allTimeWinnersCache.length > 0 ? allTimeWinnersCache : [];
+
+    if (allWinners.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-sm italic text-center py-4">No hay ganadores registrados.</p>';
+        return;
+    }
+
+    // Group by gameId
+    const groups = {};
+    allWinners.forEach(w => {
+        const gid = w.gameId || 'Sin ID';
+        if (!groups[gid]) groups[gid] = [];
+        groups[gid].push(w);
+    });
+
+    let html = '';
+    Object.entries(groups).reverse().forEach(([gid, winners]) => {
+        html += `<div class="mb-4">
+            <div class="text-xs text-gray-400 uppercase tracking-wider mb-2 font-bold border-b border-white/10 pb-1 flex items-center gap-2">
+                <i data-lucide="hash" class="w-3 h-3"></i> Partida ${gid}
+            </div>
+            <div class="space-y-1.5">`;
+        winners.forEach(w => {
+            let icon = 'award', color = 'text-emerald-400';
+            if (w.prizeType && w.prizeType.includes('Figura')) { icon = 'star'; color = 'text-blue-400'; }
+            else if (w.prizeType && w.prizeType.includes('Línea')) { icon = 'medal'; color = 'text-orange-400'; }
+            if (w.prizeType && w.prizeType.includes('No cantado')) { icon = 'x-circle'; color = 'text-red-400'; }
+            html += `<div class="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/10">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="${icon}" class="w-3.5 h-3.5 ${color}"></i>
+                    <span class="text-white font-bold text-xs">#${w.cardIndex || '?'}</span>
+                </div>
+                <span class="text-[10px] font-bold ${color} uppercase">${w.prizeType || '?'}</span>
+                <button onclick="openWinnerPaymentForm('${gid}', '${w.cardIndex || ''}', '${(w.prizeType || '').replace(/'/g, "\\'")}')"
+                    class="text-xs text-cyan-400 hover:text-cyan-300 transition-colors px-2 py-1 rounded bg-cyan-500/10 border border-cyan-500/20">
+                    <i data-lucide="wallet" class="w-3 h-3 inline"></i> Pagar
+                </button>
+            </div>`;
+        });
+        html += '</div></div>';
+    });
+
+    container.innerHTML = html;
+    if (window.lucide) window.lucide.createIcons();
+}
+
+// ============================================================
+// Winner Payment Form
+// ============================================================
+function openWinnerPaymentForm(gameId, cardSerial, mode) {
+    const modal = document.getElementById('winnerPaymentFormOverlay');
+    if (!modal) return;
+    document.getElementById('wpfGameId').textContent = gameId;
+    document.getElementById('wpfCardSerial').textContent = '#' + cardSerial;
+    document.getElementById('wpfMode').textContent = mode;
+    document.getElementById('wpfAmount').value = '';
+    document.getElementById('wpfName').value = '';
+    document.getElementById('wpfCedula').value = '';
+    document.getElementById('wpfBank').value = '';
+    document.getElementById('wpfPhone').value = '';
+    document.getElementById('wpfMethod').value = 'pago_movil';
+
+    // Store context
+    modal.dataset.gameId = gameId;
+    modal.dataset.cardSerial = cardSerial;
+    modal.dataset.mode = mode;
+
+    modal.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function closeWinnerPaymentForm() {
+    const modal = document.getElementById('winnerPaymentFormOverlay');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function submitWinnerPayment() {
+    const modal = document.getElementById('winnerPaymentFormOverlay');
+    const gameId = modal.dataset.gameId;
+    const cardSerial = modal.dataset.cardSerial;
+    const mode = modal.dataset.mode;
+    const amount = parseFloat(document.getElementById('wpfAmount').value) || 0;
+    const name = document.getElementById('wpfName').value.trim();
+    const cedula = document.getElementById('wpfCedula').value.trim();
+    const bank = document.getElementById('wpfBank').value.trim();
+    const phone = document.getElementById('wpfPhone').value.trim();
+    const method = document.getElementById('wpfMethod').value;
+
+    if (!name || !amount) {
+        showMessage('Complete al menos nombre y monto.');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/winners/payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                gameId, cardSerial, mode,
+                prize: mode,
+                amount,
+                paymentData: { name, cedula, bank, phone, method }
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showMessage(`✅ Pago de $${amount} registrado para cartón #${cardSerial}.`);
+            closeWinnerPaymentForm();
+        } else {
+            showMessage(data.error || 'Error al registrar pago.');
+        }
+    } catch (err) {
+        console.error('Error registrando pago:', err);
+        showMessage('Error de conexión.');
+    }
+}
+
+// Load allTimeWinners on page load
+fetch('/api/winners').then(r => r.json()).then(data => {
+    allTimeWinnersCache = data.winners || [];
+}).catch(e => console.error('Error cargando historial de ganadores:', e));

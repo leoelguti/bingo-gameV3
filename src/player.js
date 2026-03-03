@@ -24,6 +24,8 @@ let animatorPaymentConfig = { bank: '', phone: '', cedula: '' };
 let manualMarks = {};           // { serial: Set<value> } para preservar marcas manuales
 let totalPrize = 0;             // Pote total del juego
 let gamePaused = false;         // Juego pausado mientras se verifica un canto
+let currentGameId = '';         // ID único de la partida actual
+let currentSelectedFigure = 'X'; // Figura seleccionada por el animador
 
 // ============================================================
 // Login
@@ -200,6 +202,8 @@ function initSocket() {
         // Guardar pote y modo de juego
         totalPrize = data.totalPrize || 0;
         if (data.gameMode) currentGameMode = data.gameMode;
+        if (data.selectedFigure) currentSelectedFigure = data.selectedFigure;
+        if (data.gameId) currentGameId = data.gameId;
         updatePrizeDisplay();
 
         renderStore();
@@ -254,6 +258,18 @@ function initSocket() {
         } else {
             showToast(`❌ El canto de "${data.playerName}" (${data.claimType}) fue rechazado. El juego continúa.`, 'warning');
         }
+    });
+
+    // === GAME-ENDED: Bingo validado, partida finalizada ===
+    socket.on('game-ended', (data) => {
+        hideClaimOverlay();
+        gamePaused = false;
+        showPlayerGameEndedModal(data);
+    });
+
+    // === GAME-BREAK: Receso ===
+    socket.on('game-break', (data) => {
+        showToast(`⏸️ Receso de ${data.minutes} minuto(s). Pronto se reanudará.`, 'info');
     });
 
     socket.on('game-reset', () => {
@@ -401,14 +417,31 @@ function updateBallDisplay(number, lastBalls, ballCount) {
     container.innerHTML = '';
     if (lastBalls.length === 0) {
         container.innerHTML = '<span class="text-gray-500 text-sm italic">Esperando...</span>';
-        return;
+    } else {
+        lastBalls.forEach(b => {
+            const div = document.createElement('div');
+            div.className = 'mini-ball';
+            div.textContent = b;
+            container.appendChild(div);
+        });
     }
-    lastBalls.forEach(b => {
-        const div = document.createElement('div');
-        div.className = 'mini-ball';
-        div.textContent = b;
-        container.appendChild(div);
-    });
+
+    // Update floating ball tracker for small screens
+    const floatingBall = document.getElementById('floatingBallNumber');
+    if (floatingBall) {
+        floatingBall.textContent = getLetterForNumber(number) + number;
+    }
+    const floatingLast = document.getElementById('floatingLastBalls');
+    if (floatingLast) {
+        floatingLast.innerHTML = '';
+        const last3 = lastBalls.slice(0, 3);
+        last3.forEach(b => {
+            const span = document.createElement('span');
+            span.className = 'floating-mini-ball';
+            span.textContent = b;
+            floatingLast.appendChild(span);
+        });
+    }
 }
 
 function resetBallDisplay() {
@@ -1164,7 +1197,7 @@ function claimWin(claimType) {
         return;
     }
 
-    // Encontrar el cartón con marcas del jugador
+    // Encontrar los cartones confirmados del jugador
     const myConfirmed = allCards.filter(c =>
         myCards.has(String(c.serial)) && myCardStatuses[c.serial] === 'confirmed'
     );
@@ -1174,8 +1207,16 @@ function claimWin(claimType) {
         return;
     }
 
-    // Enviar claim para cada cartón confirmado
-    myConfirmed.forEach(card => {
+    // Validar que al menos un cartón tenga la jugada correcta
+    const validCards = myConfirmed.filter(card => validateClaimOnCard(card, claimType));
+
+    if (validCards.length === 0) {
+        showToast(`❌ Ninguno de tus cartones tiene la jugada completa para cantar ${claimType}.`, 'warning');
+        return;
+    }
+
+    // Enviar claim solo para los cartones que realmente tienen la jugada
+    validCards.forEach(card => {
         if (socket) {
             socket.emit('player-claims-win', {
                 playerName,
@@ -1186,6 +1227,72 @@ function claimWin(claimType) {
     });
 
     showToast(`🎤 ¡Has cantado ${claimType}! Esperando verificación del animador...`, 'success');
+}
+
+// ============================================================
+// Claim Validation — Verify card content before claiming
+// ============================================================
+function validateClaimOnCard(card, claimType) {
+    // Get the card element from the DOM to check marked cells
+    const cardEl = document.querySelector(`.my-bingo-card[data-serial="${card.serial}"]`);
+    if (!cardEl) return false;
+
+    // Get marked cells as a 5x5 grid
+    const grid = [];
+    for (let row = 0; row < 5; row++) {
+        grid[row] = [];
+        for (let col = 0; col < 5; col++) {
+            const cell = cardEl.querySelector(`.bingo-cell[data-row="${row}"][data-col="${col}"]`);
+            if (!cell) {
+                grid[row][col] = false;
+                continue;
+            }
+            // Center cell (FREE) is always marked
+            if (row === 2 && col === 2) {
+                grid[row][col] = true;
+            } else {
+                grid[row][col] = cell.classList.contains('marked');
+            }
+        }
+    }
+
+    if (claimType === 'Línea') {
+        // Check any complete row
+        for (let row = 0; row < 5; row++) {
+            if (grid[row].every(v => v)) return true;
+        }
+        return false;
+    }
+
+    if (claimType === 'Bingo') {
+        // All cells must be marked
+        for (let row = 0; row < 5; row++) {
+            for (let col = 0; col < 5; col++) {
+                if (!grid[row][col]) return false;
+            }
+        }
+        return true;
+    }
+
+    if (claimType === 'Figura') {
+        // Validate based on currentSelectedFigure
+        return validateFigure(grid, currentSelectedFigure);
+    }
+
+    return false;
+}
+
+function validateFigure(grid, figure) {
+    const patterns = {
+        'X': [[0, 0], [0, 4], [1, 1], [1, 3], [2, 2], [3, 1], [3, 3], [4, 0], [4, 4]],
+        'L': [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [4, 1], [4, 2], [4, 3], [4, 4]],
+        'T': [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [1, 2], [2, 2], [3, 2], [4, 2]],
+        'N': [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [1, 1], [2, 2], [3, 3], [0, 4], [1, 4], [2, 4], [3, 4], [4, 4]],
+        'H': [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [2, 1], [2, 2], [2, 3], [0, 4], [1, 4], [2, 4], [3, 4], [4, 4]]
+    };
+    const cells = patterns[figure];
+    if (!cells) return false;
+    return cells.every(([row, col]) => grid[row][col]);
 }
 
 // ============================================================
@@ -1250,3 +1357,124 @@ document.addEventListener('DOMContentLoaded', () => {
         window.lucide.createIcons();
     }
 });
+
+// ============================================================
+// Player Game-Ended Modal
+// ============================================================
+function showPlayerGameEndedModal(data) {
+    let overlay = document.getElementById('playerGameEndedOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'playerGameEndedOverlay';
+        overlay.style.cssText = `
+            position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center;
+            animation: fadeIn 0.3s ease; padding: 20px;
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    const winners = data.winners || [];
+    const isWinner = winners.some(w => {
+        const serial = String(w.cardIndex || w.cardSerial || '');
+        return myCards.has(serial);
+    });
+
+    let winnersHtml = winners.map(w => {
+        let icon = '🏆', color = '#34d399';
+        if (w.prizeType && w.prizeType.includes('Figura')) { icon = '⭐'; color = '#60a5fa'; }
+        else if (w.prizeType && w.prizeType.includes('Línea')) { icon = '🏅'; color = '#fb923c'; }
+        return `<div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;">
+            <span style="font-size: 1.2rem;">${icon}</span>
+            <span style="color: white; font-weight: 700; font-size: 0.85rem;">#${w.cardIndex || w.cardSerial || '?'}</span>
+            <span style="color: ${color}; font-weight: 700; font-size: 0.75rem; text-transform: uppercase;">${w.prizeType || '?'}</span>
+        </div>`;
+    }).join('');
+
+    let winnerPaymentFormHtml = '';
+    if (isWinner) {
+        winnerPaymentFormHtml = `
+            <div style="margin-top: 16px; background: linear-gradient(135deg, rgba(52,211,153,0.15), rgba(16,185,129,0.05));
+                border: 1px solid rgba(52,211,153,0.3); border-radius: 12px; padding: 16px; text-align: left;">
+                <h4 style="color: #34d399; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; margin-bottom: 12px;
+                    letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                    🎉 \u00a1Felicidades! Ingresa tus datos para el pago del premio
+                </h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <input type="text" id="winnerDataName" placeholder="Tu nombre completo" style="width: 100%; padding: 8px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white;
+                        font-size: 0.8rem; outline: none;">
+                    <input type="text" id="winnerDataCedula" placeholder="C\u00e9dula V-12345678" style="width: 100%; padding: 8px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white;
+                        font-size: 0.8rem; outline: none;">
+                    <input type="text" id="winnerDataBank" placeholder="Banco receptor" style="width: 100%; padding: 8px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white;
+                        font-size: 0.8rem; outline: none;">
+                    <input type="tel" id="winnerDataPhone" placeholder="Tel\u00e9fono 04XX..." style="width: 100%; padding: 8px 12px;
+                        background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white;
+                        font-size: 0.8rem; outline: none;">
+                </div>
+                <button onclick="submitWinnerPaymentData()" style="width: 100%; margin-top: 10px; padding: 10px; border-radius: 10px;
+                    background: linear-gradient(135deg, #059669, #10b981); color: white; font-weight: 700; border: none;
+                    cursor: pointer; font-size: 0.85rem; transition: all 0.2s;">
+                    ✅ Enviar Datos de Pago
+                </button>
+            </div>
+        `;
+    }
+
+    overlay.innerHTML = `
+        <div style="text-align: center; max-width: 450px; width: 100%; background: rgba(15,23,42,0.95);
+            border: 1px solid rgba(234,179,8,0.4); border-radius: 16px; padding: 24px;
+            box-shadow: 0 0 40px rgba(234,179,8,0.15);">
+            <div style="width: 64px; height: 64px; border-radius: 50%; background: linear-gradient(135deg, #f59e0b, #d97706);
+                display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;
+                box-shadow: 0 0 25px rgba(245,158,11,0.4);">
+                <span style="font-size: 1.8rem;">🏆</span>
+            </div>
+            <h2 style="color: white; font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; font-family: 'Outfit', sans-serif;">
+                \u00a1Partida Finalizada!
+            </h2>
+            <p style="color: #9ca3af; font-size: 0.8rem; margin-bottom: 16px;">Pote: $${(data.totalPrize || 0).toFixed(2)}</p>
+            <div style="margin-bottom: 12px;">
+                <h4 style="color: #fbbf24; font-weight: 700; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+                    margin-bottom: 8px;">Ganadores</h4>
+                <div style="display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto;">
+                    ${winnersHtml || '<p style="color: #6b7280; font-size: 0.85rem; font-style: italic;">No hubo ganadores.</p>'}
+                </div>
+            </div>
+            ${winnerPaymentFormHtml}
+            <button onclick="document.getElementById('playerGameEndedOverlay').remove();"
+                style="margin-top: 16px; padding: 10px 24px; border-radius: 10px; background: rgba(255,255,255,0.1);
+                border: 1px solid rgba(255,255,255,0.2); color: white; font-weight: 600; cursor: pointer;
+                font-size: 0.85rem; transition: all 0.2s; width: 100%;">
+                Cerrar
+            </button>
+        </div>
+    `;
+}
+
+function submitWinnerPaymentData() {
+    const name = document.getElementById('winnerDataName')?.value.trim();
+    const cedula = document.getElementById('winnerDataCedula')?.value.trim();
+    const bank = document.getElementById('winnerDataBank')?.value.trim();
+    const phone = document.getElementById('winnerDataPhone')?.value.trim();
+
+    if (!name) {
+        showToast('Por favor ingresa tu nombre.', 'warning');
+        return;
+    }
+
+    if (socket) {
+        socket.emit('winner-payment-data', {
+            playerName,
+            gameId: currentGameId,
+            paymentData: { name, cedula, bank, phone }
+        });
+    }
+
+    showToast('✅ Datos enviados. El animador te contactar\u00e1 para el pago.', 'success');
+    const overlay = document.getElementById('playerGameEndedOverlay');
+    if (overlay) overlay.remove();
+}

@@ -13,9 +13,50 @@ const PORT = process.env.PORT || 3000;
 // Ruta de la carpeta donde se guarda la partida
 const savePath = path.join(__dirname, 'saved_games');
 const saveFile = path.join(savePath, 'gameState.json');
+const winnersFile = path.join(savePath, 'winners_history.json');
+const cardHashesFile = path.join(savePath, 'card_hashes.json');
+const winnerPaymentsFile = path.join(savePath, 'winner_payments.json');
 
 if (!fs.existsSync(savePath)) {
     fs.mkdirSync(savePath);
+}
+
+// ============================================================
+// Persistent data helpers
+// ============================================================
+function loadJSON(filePath, defaultValue) {
+    try {
+        if (fs.existsSync(filePath)) {
+            return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        }
+    } catch (e) {
+        console.error(`Error loading ${filePath}:`, e.message);
+    }
+    return defaultValue;
+}
+
+function saveJSON(filePath, data) {
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    } catch (e) {
+        console.error(`Error saving ${filePath}:`, e.message);
+    }
+}
+
+// Persistent winners (survive game resets)
+let allTimeWinners = loadJSON(winnersFile, []);
+// Card hash history for uniqueness
+let cardHashHistory = loadJSON(cardHashesFile, []);
+// Winner payment records
+let winnerPayments = loadJSON(winnerPaymentsFile, []);
+
+function generateGameId() {
+    return Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+
+function hashCard(card) {
+    // Simple hash: stringify the numbers object
+    return JSON.stringify(card.numbers);
 }
 
 // Middleware
@@ -48,6 +89,7 @@ let paymentConfig = {
 };
 
 let gameState = {
+    gameId: generateGameId(),
     calledNumbers: [],
     currentNumber: null,
     lastBalls: [],
@@ -528,6 +570,38 @@ app.get('/api/payments/pending', (req, res) => {
 });
 
 // ============================================================
+// API — Winners History & Payments
+// ============================================================
+app.get('/api/winners', (req, res) => {
+    res.json({ winners: allTimeWinners });
+});
+
+app.get('/api/winners/payments', (req, res) => {
+    res.json({ payments: winnerPayments });
+});
+
+app.post('/api/winners/payment', (req, res) => {
+    const { gameId, cardSerial, mode, prize, amount, paymentData } = req.body;
+    if (!gameId || !cardSerial || !mode) {
+        return res.status(400).json({ error: 'Datos incompletos.' });
+    }
+    const record = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        gameId,
+        cardSerial,
+        mode,
+        prize: prize || '',
+        amount: amount || 0,
+        paymentData: paymentData || {},
+        createdAt: new Date().toISOString()
+    };
+    winnerPayments.push(record);
+    saveJSON(winnerPaymentsFile, winnerPayments);
+    console.log(`[WINNER-PAYMENT] Pago registrado para cartón #${cardSerial} (${mode}) — $${amount}`);
+    res.json({ success: true, record });
+});
+
+// ============================================================
 // API — Guardar/Cargar partida
 // ============================================================
 app.post('/save-game', (req, res) => {
@@ -569,7 +643,8 @@ io.on('connection', (socket) => {
     socket.emit('sync-state', {
         ...gameState,
         cards: getPublicCardList(),
-        paymentConfig
+        paymentConfig,
+        allTimeWinners
     });
 
     // Animador genera bola
@@ -622,6 +697,8 @@ io.on('connection', (socket) => {
                 cards: getPublicCardList(),
                 totalPrize: gameState.totalPrize,
                 gameMode: gameState.gameMode,
+                selectedFigure: gameState.selectedFigure,
+                gameId: gameState.gameId,
                 soldCount: gameCards.length,
                 removedCount: removedCount,
                 releasedSerials: releasedSerials
@@ -636,8 +713,24 @@ io.on('connection', (socket) => {
             if (purchasedCards[serial].timerId) clearTimeout(purchasedCards[serial].timerId);
         });
 
+        // Check card uniqueness and track hashes
+        if (data.cards && Array.isArray(data.cards)) {
+            const newHashes = data.cards.map(c => hashCard(c));
+            const duplicates = newHashes.filter(h => cardHashHistory.includes(h));
+            if (duplicates.length > 0) {
+                console.log(`[CARDS] ${duplicates.length} cartón(es) duplicado(s) detectados (se aceptan igualmente).`);
+            }
+            cardHashHistory.push(...newHashes);
+            // Keep only last 10000 hashes to avoid unbounded growth
+            if (cardHashHistory.length > 10000) {
+                cardHashHistory = cardHashHistory.slice(-10000);
+            }
+            saveJSON(cardHashesFile, cardHashHistory);
+        }
+
         gameCards = data.cards;
         purchasedCards = {};
+        gameState.gameId = data.gameId || generateGameId();
         gameState.cardPrice = data.cardPrice;
         gameState.gameMode = data.gameMode;
         gameState.selectedFigure = data.selectedFigure;
@@ -652,15 +745,23 @@ io.on('connection', (socket) => {
 
         socket.broadcast.emit('cards-updated', {
             cards: getPublicCardList(),
-            cardPrice: gameState.cardPrice
+            cardPrice: gameState.cardPrice,
+            gameId: gameState.gameId
         });
     });
 
     // Animador anuncia ganador
     socket.on('winner-announced', (data) => {
-        gameState.winners.push(data);
+        const winnerEntry = {
+            ...data,
+            gameId: gameState.gameId,
+            timestamp: new Date().toISOString()
+        };
+        gameState.winners.push(winnerEntry);
+        allTimeWinners.push(winnerEntry);
+        saveJSON(winnersFile, allTimeWinners);
         gameState.gameMode = data.nextMode || gameState.gameMode;
-        socket.broadcast.emit('winner-announced', data);
+        socket.broadcast.emit('winner-announced', winnerEntry);
     });
 
     // Jugador canta premio — pausar juego
@@ -679,6 +780,23 @@ io.on('connection', (socket) => {
         console.log(`[CLAIM-RESULT] Cartón #${data.cardSerial}: ${data.valid ? 'VÁLIDO' : 'INVÁLIDO'}`);
         // Retransmitir resultado a todos
         io.emit('claim-result', data);
+
+        // Si es Bingo válido, emitir game-ended
+        if (data.valid && data.claimType === 'Bingo') {
+            console.log(`[GAME-ENDED] Bingo válido. Partida ${gameState.gameId} terminada.`);
+            io.emit('game-ended', {
+                gameId: gameState.gameId,
+                winners: gameState.winners,
+                totalPrize: gameState.totalPrize,
+                allTimeWinners
+            });
+        }
+    });
+
+    // Animador notifica receso
+    socket.on('game-break', (data) => {
+        console.log(`[BREAK] Receso de ${data.minutes} minutos.`);
+        io.emit('game-break', { minutes: data.minutes });
     });
 
     // Animador resetea partida
@@ -689,6 +807,7 @@ io.on('connection', (socket) => {
         gameCards = [];
         purchasedCards = {};
         gameState = {
+            gameId: generateGameId(),
             calledNumbers: [],
             currentNumber: null,
             lastBalls: [],
@@ -701,6 +820,7 @@ io.on('connection', (socket) => {
             gameActive: false,
             gameStarted: false
         };
+        // NOTE: allTimeWinners is NOT cleared on reset
         socket.broadcast.emit('game-reset');
     });
 
